@@ -9,7 +9,7 @@ import json
 
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
 
-SYSTEM_PROMPT = """You're a filing assistant for Hunch creative agency. Your job is to classify where email attachments should be filed.
+SYSTEM_PROMPT = """You're a filing assistant for Hunch creative agency. Classify where email attachments should be filed.
 
 ## Folder Options
 - **Briefs**: Initial briefs, scope documents, requirements, project kickoff materials
@@ -17,29 +17,26 @@ SYSTEM_PROMPT = """You're a filing assistant for Hunch creative agency. Your job
 - **Round X**: Outgoing deliverables from Hunch to client (versioned work)
 - **Other**: Everything else (admin, invoices, misc)
 
-## Classification Rules
+## Rules
 
 ### Outgoing Work (→ Round X)
-Classify as outgoing if 3+ of these signals are present:
+Classify as outgoing if 3+ of these signals:
 - Sender is @hunch.co.nz
-- Recipients include external (client) email addresses
+- Recipients include external (client) emails
 - Filename contains job number (e.g., "SKY 045 - Banner v2.pdf")
-- File type is .pdf, .docx, or .pptx
-- Email language suggests delivery: "here's the latest", "for your review", "updated version", "please find attached", "ready for review"
+- File type: .pdf, .docx, .pptx
+- Email language: "here's the latest", "for your review", "updated version"
 
-### Briefs (→ Briefs folder)
-- Contains words: "brief", "scope", "requirements", "kickoff", "project outline"
-- Often at project start
+### Briefs
+- Words: "brief", "scope", "requirements", "kickoff"
 - Usually from client to Hunch
 
-### Feedback (→ Feedback folder)
-- Contains words: "feedback", "amends", "comments", "changes", "revision", "updates needed"
+### Feedback
+- Words: "feedback", "amends", "comments", "changes", "revision"
 - Sender is client (not @hunch.co.nz)
-- Response to previous deliverable
 
-### Other (→ Other folder)
+### Other
 - Doesn't fit above categories
-- Admin, invoices, contracts, general correspondence
 
 ## Response Format
 Respond with ONLY valid JSON:
@@ -50,21 +47,19 @@ Respond with ONLY valid JSON:
   "reasoning": "Brief explanation"
 }
 
-If is_outgoing is true, the folder field will be ignored (system will create Round X).
+If is_outgoing is true, folder will be ignored (system creates Round X).
 """
 
 
 def classify_filing(sender_email, all_recipients, subject_line, email_content, attachment_names):
     """
     Use Claude to classify where files should be filed
-    Returns: { folder: str, is_outgoing: bool, confidence: str, reasoning: str }
     """
     
     if not ANTHROPIC_API_KEY:
-        print('No Anthropic API key - using fallback classification')
+        print('No Anthropic API key - using fallback')
         return fallback_classification(sender_email, subject_line, attachment_names)
     
-    # Build context for Claude
     is_from_hunch = '@hunch.co.nz' in sender_email.lower()
     external_recipients = [r for r in all_recipients if '@hunch.co.nz' not in r.lower()]
     
@@ -92,33 +87,30 @@ def classify_filing(sender_email, all_recipients, subject_line, email_content, a
                 'model': 'claude-sonnet-4-20250514',
                 'max_tokens': 500,
                 'system': SYSTEM_PROMPT,
-                'messages': [
-                    {'role': 'user', 'content': user_message}
-                ]
-            }
+                'messages': [{'role': 'user', 'content': user_message}]
+            },
+            timeout=30
         )
         
         response.raise_for_status()
         result = response.json()
         
-        # Extract text response
         assistant_message = ''
         for block in result.get('content', []):
             if block.get('type') == 'text':
                 assistant_message = block.get('text', '')
                 break
         
-        # Parse JSON response
         parsed = parse_json_response(assistant_message)
         
         if parsed:
             return parsed
         else:
-            print(f'Failed to parse Claude response: {assistant_message}')
+            print(f'Failed to parse: {assistant_message}')
             return fallback_classification(sender_email, subject_line, attachment_names)
             
     except Exception as e:
-        print(f'Claude API error: {e}')
+        print(f'Claude error: {e}')
         return fallback_classification(sender_email, subject_line, attachment_names)
 
 
@@ -129,45 +121,40 @@ def parse_json_response(text):
     
     text = text.strip()
     
-    # Try direct parse
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
     
-    # Try extracting from code blocks
     if '```json' in text:
         try:
             start = text.find('```json') + 7
             end = text.find('```', start)
             if end > start:
                 return json.loads(text[start:end].strip())
-        except json.JSONDecodeError:
+        except:
             pass
     
-    # Try finding JSON object
     try:
         start = text.find('{')
         end = text.rfind('}')
         if start != -1 and end > start:
             return json.loads(text[start:end + 1])
-    except json.JSONDecodeError:
+    except:
         pass
     
     return None
 
 
 def fallback_classification(sender_email, subject_line, attachment_names):
-    """
-    Simple rule-based fallback if Claude unavailable
-    """
+    """Rule-based fallback if Claude unavailable"""
     subject_lower = subject_line.lower()
     sender_lower = sender_email.lower()
     attachments_str = ' '.join(attachment_names).lower()
     
     is_from_hunch = '@hunch.co.nz' in sender_lower
     
-    # Check for outgoing signals
+    # Check for outgoing
     outgoing_signals = 0
     if is_from_hunch:
         outgoing_signals += 1
@@ -175,50 +162,46 @@ def fallback_classification(sender_email, subject_line, attachment_names):
         outgoing_signals += 1
     if any(phrase in subject_lower for phrase in ['for your review', 'for review', 'attached', 'latest']):
         outgoing_signals += 1
-    # Check if filename contains job number pattern (e.g., SKY 045)
+    
     import re
     if re.search(r'[A-Z]{3}\s?\d{3}', ' '.join(attachment_names)):
         outgoing_signals += 1
     
     if outgoing_signals >= 2 and is_from_hunch:
         return {
-            'folder': 'Other',  # Will be overridden by Round X
+            'folder': 'Other',
             'is_outgoing': True,
             'confidence': 'medium',
             'reasoning': 'Fallback: From Hunch with delivery signals'
         }
     
-    # Check for briefs
     if any(word in subject_lower for word in ['brief', 'scope', 'requirement', 'kickoff']):
         return {
             'folder': 'Briefs',
             'is_outgoing': False,
             'confidence': 'medium',
-            'reasoning': 'Fallback: Brief-related keywords in subject'
+            'reasoning': 'Fallback: Brief keywords in subject'
         }
     
-    # Check for feedback
     if any(word in subject_lower for word in ['feedback', 'amend', 'comment', 'change', 'revision']):
         return {
             'folder': 'Feedback',
             'is_outgoing': False,
             'confidence': 'medium',
-            'reasoning': 'Fallback: Feedback-related keywords in subject'
+            'reasoning': 'Fallback: Feedback keywords in subject'
         }
     
-    # Check if from client (not Hunch) - likely feedback
     if not is_from_hunch and attachment_names:
         return {
             'folder': 'Feedback',
             'is_outgoing': False,
             'confidence': 'low',
-            'reasoning': 'Fallback: Attachments from client, assuming feedback'
+            'reasoning': 'Fallback: Attachments from client'
         }
     
-    # Default to Other
     return {
         'folder': 'Other',
         'is_outgoing': False,
         'confidence': 'low',
-        'reasoning': 'Fallback: No clear signals, defaulting to Other'
+        'reasoning': 'Fallback: No clear signals'
     }
