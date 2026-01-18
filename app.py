@@ -6,6 +6,7 @@ Receives requests from Traffic, classifies content, calls PA Filing.
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import os
+import json
 from datetime import datetime
 
 import classifier
@@ -46,10 +47,19 @@ def file_attachments():
         project_record_id = data.get('projectRecordId')
         all_recipients = data.get('allRecipients', [])
         
+        # Fix: attachmentNames might arrive as a JSON string instead of a list
+        if isinstance(attachment_names, str):
+            try:
+                attachment_names = json.loads(attachment_names)
+            except json.JSONDecodeError:
+                # If it's a single filename string, wrap it in a list
+                attachment_names = [attachment_names] if attachment_names else []
+        
         print(f'=== DOT FILE ===')
         print(f'Job: {job_number} | Client: {client_code}')
         print(f'From: {sender_email}')
         print(f'Attachments: {attachment_names}')
+        print(f'Attachments type: {type(attachment_names)}')
         
         if not job_number or not client_code:
             return jsonify({'success': False, 'error': 'Missing jobNumber or clientCode'}), 400
@@ -178,7 +188,7 @@ def file_attachments():
             'destination': destination_folder,
             'destPath': dest_path,
             'folderUrl': folder_url,
-            'basefolderUrl': base_folder_url,
+            'baseFolderUrl': base_folder_url,
             'filesMoved': files_moved,
             'roundNumber': round_number,
             'classification': classification
