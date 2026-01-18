@@ -41,7 +41,7 @@ def get_client_sharepoint(client_code):
             return None
         
         fields = records[0].get('fields', {})
-        sharepoint_url = fields.get('Sharepoint URL')
+        sharepoint_url = fields.get('Sharepoint ID')  # Field is called 'Sharepoint ID' in Airtable
         
         if not sharepoint_url:
             print(f'No SharePoint URL configured for: {client_code}')
