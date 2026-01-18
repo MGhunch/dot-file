@@ -36,7 +36,7 @@ def call_filing(source_site_url, source_path, source_files, dest_site_url, dest_
     print(f'Calling PA Filing:')
     print(f'  Source: {source_site_url}{source_path}')
     print(f'  Files: {source_files}')
-    print(f'  Dest: {dest_site_url}{dest_path}')
+    print(f'  Dest: {dest_site_url}{dest_path}')  # dest_path now includes /Shared Documents/
     print(f'  Create folder: {create_folder}')
     print(f'  Save email: {save_email}')
     
