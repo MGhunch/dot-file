@@ -59,8 +59,8 @@ def get_client_sharepoint(client_code):
 
 def get_project_folder(job_number):
     """
-    Look up project folder name and current round
-    Returns: { folder_name: str, round: int, record_id: str } or None
+    Look up project folder name, current round, and existing Files URL
+    Returns: { folder_name: str, round: int, record_id: str, files_url: str } or None
     """
     try:
         url = get_airtable_url('Projects')
@@ -90,7 +90,8 @@ def get_project_folder(job_number):
         return {
             'folder_name': folder_name,
             'round': fields.get('Round', 0) or 0,
-            'record_id': record['id']
+            'record_id': record['id'],
+            'files_url': fields.get('Files Url', '')  # Return existing Files URL if set
         }
         
     except Exception as e:
@@ -98,7 +99,7 @@ def get_project_folder(job_number):
         return None
 
 
-def update_project_filing(record_id, round_number=None, folder_url=None, destination=None):
+def update_project_filing(record_id, round_number=None, files_url=None, destination=None):
     """
     Update project record with filing info
     """
@@ -116,8 +117,8 @@ def update_project_filing(record_id, round_number=None, folder_url=None, destina
         if round_number is not None:
             fields['Round'] = round_number
         
-        if folder_url:
-            fields['Latest Folder URL'] = folder_url
+        if files_url:
+            fields['Files Url'] = files_url
         
         if destination:
             fields['Last Filed To'] = destination

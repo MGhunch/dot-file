@@ -61,15 +61,21 @@ def file_attachments():
         
         print(f'Dest site: {client_info["sharepoint_url"]}')
         
-        # 2. Get job folder name from Airtable
+        # 2. Get job folder info from Airtable
         project_info = airtable.get_project_folder(job_number)
         if not project_info:
             # Fallback: use job number as folder prefix
             job_folder_name = job_number
+            existing_files_url = None
             print(f'No project found, using job number as folder: {job_folder_name}')
         else:
             job_folder_name = project_info.get('folder_name', job_number)
+            existing_files_url = project_info.get('files_url')
+            if not project_record_id:
+                project_record_id = project_info.get('record_id')
             print(f'Job folder: {job_folder_name}')
+            if existing_files_url:
+                print(f'Existing Files URL: {existing_files_url}')
         
         # 3. Classify where files should go
         classification = classifier.classify_filing(
@@ -98,9 +104,22 @@ def file_attachments():
             if not destination_folder.startswith('--'):
                 destination_folder = f"-- {destination_folder}"
         
-        # 5. Build full destination path
-        dest_path = f"/Shared Documents/{job_folder_name}/{destination_folder}"
+        # 5. Build full destination path and URL
+        # Use existing files_url if available, otherwise construct it
+        if existing_files_url:
+            # Extract base path from existing URL
+            base_folder_url = existing_files_url.rstrip('/')
+            dest_path = base_folder_url.split('/Shared Documents/')[-1]
+            dest_path = f"/Shared Documents/{dest_path}/{destination_folder}"
+            folder_url = f"{base_folder_url}/{destination_folder}"
+        else:
+            dest_path = f"/Shared Documents/{job_folder_name}/{destination_folder}"
+            # Build the base folder URL (without subfolder)
+            base_folder_url = f"{client_info['sharepoint_url']}/Shared Documents/{job_folder_name}"
+            folder_url = f"{base_folder_url}/{destination_folder}"
+        
         print(f'Destination path: {dest_path}')
+        print(f'Folder URL: {folder_url}')
         
         # 6. Build .eml filename if we have email content
         eml_filename = ''
@@ -138,12 +157,12 @@ def file_attachments():
                 'filed': False
             }), 500
         
-        # 8. Update Airtable
+        # 8. Update Airtable - save Files URL if not already set
         if project_record_id:
             airtable.update_project_filing(
                 record_id=project_record_id,
                 round_number=round_number,
-                folder_url=pa_result.get('destFolderUrl', ''),
+                files_url=base_folder_url if not existing_files_url else None,  # Only save if not already set
                 destination=destination_folder
             )
         
@@ -158,6 +177,8 @@ def file_attachments():
             'jobNumber': job_number,
             'destination': destination_folder,
             'destPath': dest_path,
+            'folderUrl': folder_url,
+            'basefolderUrl': base_folder_url,
             'filesMoved': files_moved,
             'roundNumber': round_number,
             'classification': classification
