@@ -14,7 +14,6 @@ import os
 import json
 from datetime import datetime
 
-import classifier
 import airtable
 import power_automate
 
@@ -126,35 +125,47 @@ def file_attachments():
         print(f'Dest site: {dest_site_url}')
         print(f'Job folder: {job_folder_path}')
         
-        # 4. Classify where files should go (subfolder)
-        classification = classifier.classify_filing(
-            sender_email=sender_email,
-            all_recipients=all_recipients,
-            subject_line=subject_line,
-            email_content=email_content,
-            attachment_names=attachment_names
-        )
+        # 4. Determine destination folder from route or folderType
+        route = data.get('route', '')
+        folder_type = data.get('folderType', '')  # Direct override from Ask Dot
         
-        print(f'Classification: {classification}')
+        # Route to folder mapping
+        ROUTE_TO_FOLDER = {
+            'triage': 'briefs',
+            'incoming': 'briefs',
+            'work-to-client': 'round',
+            'feedback': 'feedback',
+            'file': 'other',
+            'update': 'other',
+        }
         
-        destination_folder = classification['folder']
-        is_outgoing = classification.get('is_outgoing', False)
+        # folderType override takes priority, then route mapping, then default
+        if folder_type:
+            resolved_folder = folder_type
+        else:
+            resolved_folder = ROUTE_TO_FOLDER.get(route, 'other')
         
-        # 5. Handle Round logic if outgoing
+        print(f'Route: {route} | FolderType: {folder_type} | Resolved: {resolved_folder}')
+        
+        # 5. Handle Round logic if work-to-client
         round_number = None
-        if is_outgoing:
+        if resolved_folder == 'round':
             # Get current round from Airtable and increment
             current_round = project_info.get('round', 0) or 0
             round_number = current_round + 1
             destination_folder = f"-- Round {round_number}"
             print(f'Outgoing work - Round {round_number}')
         else:
-            # Add -- prefix if not present
-            if not destination_folder.startswith('--'):
-                destination_folder = f"-- {destination_folder}"
+            # Map folder type to actual folder name
+            FOLDER_NAMES = {
+                'briefs': '-- Briefs',
+                'feedback': '-- Feedback',
+                'other': '-- Other',
+            }
+            destination_folder = FOLDER_NAMES.get(resolved_folder, '-- Other')
         
-        # 6. Build full destination path
-        dest_path = f"/Shared Documents/{job_folder_path}/{destination_folder}"
+        # 6. Build full destination path (without /Shared Documents/ - PA adds that via library)
+        dest_path = f"/{job_folder_path}/{destination_folder}"
         folder_url = f"{files_url}/{destination_folder}"
         
         print(f'Destination path: {dest_path}')
@@ -219,7 +230,8 @@ def file_attachments():
             'filesUrl': files_url,
             'filesMoved': files_moved,
             'roundNumber': round_number,
-            'classification': classification
+            'route': route,
+            'folderType': resolved_folder
         })
         
     except Exception as e:
