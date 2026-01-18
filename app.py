@@ -164,8 +164,8 @@ def file_attachments():
             }
             destination_folder = FOLDER_NAMES.get(resolved_folder, '-- Other')
         
-        # 6. Build full destination path (no leading slash - PA adds library context)
-        dest_path = f"{job_folder_path}/{destination_folder}"
+        # 6. Build full destination path (include /Shared Documents/ for SharePoint API)
+        dest_path = f"/Shared Documents/{job_folder_path}/{destination_folder}"
         folder_url = f"{files_url}/{destination_folder}"
         
         print(f'Destination path: {dest_path}')
