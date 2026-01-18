@@ -1,6 +1,11 @@
 """
 Dot File - Attachment Filing Service
 Receives requests from Traffic, classifies content, calls PA Filing.
+
+UPDATED: Files Url approach
+- Every project must have Files Url in Airtable
+- No more path construction - just use what Airtable remembers
+- Friendly error if no job bag set up
 """
 
 from flask import Flask, jsonify, request
@@ -23,13 +28,19 @@ INCOMING_PATH = '/Shared Documents/-- Incoming'
 
 @app.route('/')
 def health():
-    return jsonify({'status': 'ok', 'service': 'dot-file'})
+    return jsonify({'status': 'ok', 'service': 'dot-file', 'version': '2.0'})
 
 
 @app.route('/file', methods=['POST'])
 def file_attachments():
     """
     Main endpoint - receives filing request from Traffic
+    
+    FILES URL APPROACH:
+    1. Look up project in Airtable
+    2. Get Files Url (required - no construction)
+    3. Classify where files should go (subfolder)
+    4. Call PA Filing
     """
     try:
         data = request.get_json()
@@ -55,39 +66,67 @@ def file_attachments():
                 # If it's a single filename string, wrap it in a list
                 attachment_names = [attachment_names] if attachment_names else []
         
-        print(f'=== DOT FILE ===')
+        print(f'=== DOT FILE v2.0 ===')
         print(f'Job: {job_number} | Client: {client_code}')
         print(f'From: {sender_email}')
         print(f'Attachments: {attachment_names}')
-        print(f'Attachments type: {type(attachment_names)}')
         
-        if not job_number or not client_code:
-            return jsonify({'success': False, 'error': 'Missing jobNumber or clientCode'}), 400
+        if not job_number:
+            return jsonify({
+                'success': False, 
+                'error': 'Missing jobNumber',
+                'filed': False
+            }), 400
         
-        # 1. Get client SharePoint URL from Airtable
-        client_info = airtable.get_client_sharepoint(client_code)
-        if not client_info:
-            return jsonify({'success': False, 'error': f'No SharePoint URL for {client_code}'}), 404
-        
-        print(f'Dest site: {client_info["sharepoint_url"]}')
-        
-        # 2. Get job folder info from Airtable
+        # 1. Get project info from Airtable (including Files Url)
         project_info = airtable.get_project_folder(job_number)
-        if not project_info:
-            # Fallback: use job number as folder prefix
-            job_folder_name = job_number
-            existing_files_url = None
-            print(f'No project found, using job number as folder: {job_folder_name}')
-        else:
-            job_folder_name = project_info.get('folder_name', job_number)
-            existing_files_url = project_info.get('files_url')
-            if not project_record_id:
-                project_record_id = project_info.get('record_id')
-            print(f'Job folder: {job_folder_name}')
-            if existing_files_url:
-                print(f'Existing Files URL: {existing_files_url}')
         
-        # 3. Classify where files should go
+        if not project_info:
+            return jsonify({
+                'success': False, 
+                'error': f'No project found for {job_number}',
+                'filed': False
+            }), 404
+        
+        # 2. Get Files Url - this is REQUIRED
+        files_url = project_info.get('files_url')
+        
+        if not files_url:
+            return jsonify({
+                'success': False,
+                'error': f'No job bag for {job_number}. Reply TRIAGE to set one up.',
+                'errorType': 'no_job_bag',
+                'filed': False
+            }), 400
+        
+        # Get other project info
+        if not project_record_id:
+            project_record_id = project_info.get('record_id')
+        
+        print(f'Files Url: {files_url}')
+        
+        # 3. Parse Files Url to get site and path
+        # Format: https://hunch.sharepoint.com/sites/Labour/Shared Documents/LAB 055 - Election 26
+        try:
+            # Split into site URL and path
+            if '/Shared Documents/' in files_url:
+                parts = files_url.split('/Shared Documents/')
+                dest_site_url = parts[0]  # https://hunch.sharepoint.com/sites/Labour
+                job_folder_path = parts[1]  # LAB 055 - Election 26
+            else:
+                raise ValueError(f'Invalid Files Url format: {files_url}')
+        except Exception as e:
+            print(f'Error parsing Files Url: {e}')
+            return jsonify({
+                'success': False,
+                'error': f'Invalid Files Url format for {job_number}',
+                'filed': False
+            }), 400
+        
+        print(f'Dest site: {dest_site_url}')
+        print(f'Job folder: {job_folder_path}')
+        
+        # 4. Classify where files should go (subfolder)
         classification = classifier.classify_filing(
             sender_email=sender_email,
             all_recipients=all_recipients,
@@ -101,11 +140,11 @@ def file_attachments():
         destination_folder = classification['folder']
         is_outgoing = classification.get('is_outgoing', False)
         
-        # 4. Handle Round logic if outgoing
+        # 5. Handle Round logic if outgoing
         round_number = None
         if is_outgoing:
             # Get current round from Airtable and increment
-            current_round = project_info.get('round', 0) if project_info else 0
+            current_round = project_info.get('round', 0) or 0
             round_number = current_round + 1
             destination_folder = f"-- Round {round_number}"
             print(f'Outgoing work - Round {round_number}')
@@ -114,24 +153,14 @@ def file_attachments():
             if not destination_folder.startswith('--'):
                 destination_folder = f"-- {destination_folder}"
         
-        # 5. Build full destination path and URL
-        # Use existing files_url if available, otherwise construct it
-        if existing_files_url:
-            # Extract base path from existing URL
-            base_folder_url = existing_files_url.rstrip('/')
-            dest_path = base_folder_url.split('/Shared Documents/')[-1]
-            dest_path = f"/Shared Documents/{dest_path}/{destination_folder}"
-            folder_url = f"{base_folder_url}/{destination_folder}"
-        else:
-            dest_path = f"/Shared Documents/{job_folder_name}/{destination_folder}"
-            # Build the base folder URL (without subfolder)
-            base_folder_url = f"{client_info['sharepoint_url']}/Shared Documents/{job_folder_name}"
-            folder_url = f"{base_folder_url}/{destination_folder}"
+        # 6. Build full destination path
+        dest_path = f"/Shared Documents/{job_folder_path}/{destination_folder}"
+        folder_url = f"{files_url}/{destination_folder}"
         
         print(f'Destination path: {dest_path}')
         print(f'Folder URL: {folder_url}')
         
-        # 6. Build .eml filename if we have email content
+        # 7. Build .eml filename if we have email content
         eml_filename = ''
         eml_content = ''
         if email_content:
@@ -145,12 +174,12 @@ def file_attachments():
                 received_datetime=received_datetime
             )
         
-        # 7. Call PA Filing
+        # 8. Call PA Filing
         pa_result = power_automate.call_filing(
             source_site_url=HUNCH_SITE_URL,
             source_path=INCOMING_PATH,
             source_files=attachment_names if has_attachments else [],
-            dest_site_url=client_info['sharepoint_url'],
+            dest_site_url=dest_site_url,
             dest_path=dest_path,
             create_folder=True,
             save_email=bool(email_content),
@@ -167,16 +196,15 @@ def file_attachments():
                 'filed': False
             }), 500
         
-        # 8. Update Airtable - save Files URL if not already set
-        if project_record_id:
+        # 9. Update Airtable with round number if applicable
+        if project_record_id and round_number:
             airtable.update_project_filing(
                 record_id=project_record_id,
                 round_number=round_number,
-                files_url=base_folder_url if not existing_files_url else None,  # Only save if not already set
                 destination=destination_folder
             )
         
-        # 9. Build response
+        # 10. Build response
         files_moved = pa_result.get('sourceFiles', [])
         if pa_result.get('emailSaved'):
             files_moved.append(pa_result['emailSaved'])
@@ -188,7 +216,7 @@ def file_attachments():
             'destination': destination_folder,
             'destPath': dest_path,
             'folderUrl': folder_url,
-            'baseFolderUrl': base_folder_url,
+            'filesUrl': files_url,
             'filesMoved': files_moved,
             'roundNumber': round_number,
             'classification': classification
