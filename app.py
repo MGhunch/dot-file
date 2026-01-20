@@ -132,7 +132,7 @@ def file_attachments():
         # Route to folder mapping
         ROUTE_TO_FOLDER = {
             'triage': 'briefs',
-            'incoming': 'briefs',
+            'new-job': 'briefs',
             'work-to-client': 'round',
             'feedback': 'feedback',
             'file': 'other',
